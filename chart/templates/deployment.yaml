@@ -1,0 +1,128 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vault-secrets-gateway.fullname" . }}
+  labels:
+    {{- include "vault-secrets-gateway.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "vault-secrets-gateway.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "vault-secrets-gateway.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "vault-secrets-gateway.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          command: ["sh", "-c"]
+          args:
+            - |
+              {{- with .Values.credsSecretName }}
+              # We don't know what name the user will give the creds file within the secret, but
+              # provided there's just one, this should work.
+              cp /creds/* /var/tmp/hcpcreds.json
+              {{- else }}
+              cat - > /var/tmp/hcpcreds.json <<EOF
+              {
+                "project_id": "{{ (split "/" ".Values.hcpWorkloadIdentityProviderResourceName")._3 }}",
+                "scheme": "workload",
+                "workload": {
+                  "provider_resource_name": "{{ .Values.hcpWorkloadIdentityProviderResourceName }}",
+                  "file": { "path": "/service-account/token" }
+                }
+              }
+              EOF
+              {{- end }}
+
+              {{ with .Values.hcpScadaInsecureTls }}
+              export HCP_SCADA_TLS=insecure
+              {{- end }}
+              cat - > /var/tmp/vault-secrets-gateway.hcl <<EOF
+              gateway {
+                meta_config {
+                  use_hostname = true
+                }
+                metadata = {
+                  {{- range $key, $val := .Values.metadata }}
+                  "{{ $key }}" = "{{ $val }}"
+                  {{- end }}
+                }
+                cert_path = "/var/tmp/cert.pem"
+                http_port = 8080
+              }
+              cloud {
+                api_address = "{{ .Values.hcpApiAddress }}"
+                auth_url = "{{ .Values.hcpAuthUrl }}"
+                scada_address = "{{ .Values.hcpScadaAddress }}"
+                resource_name = "{{ .Values.hcpGatewayPoolResourceName }}"
+                cred_file = "/var/tmp/hcpcreds.json"
+              }
+              EOF
+
+              /bin/vault-secrets-gateway run --config-file /var/tmp/vault-secrets-gateway.hcl
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: 8080
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 8080
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+          {{- with .Values.credsSecretName }}
+          - name: creds-vol
+            mountPath: /creds
+            readOnly: true
+          {{- else }}
+          - name: token-vol
+            mountPath: /service-account
+            readOnly: true
+          {{- end }}
+      volumes:
+      {{- with .Values.credsSecretName }}
+      - name: creds-vol
+        secret:
+          secretName: {{ . }}
+      {{- else }}
+      - name: token-vol
+        projected:
+          sources:
+            - serviceAccountToken:
+                audience: vault-secrets
+                expirationSeconds: 3600
+                path: token
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
