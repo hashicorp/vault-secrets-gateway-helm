@@ -1,3 +1,5 @@
+# Copyright (c) HashiCorp, Inc.
+
 # Default values for vault-secrets-gateway.
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
