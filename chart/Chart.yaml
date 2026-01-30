@@ -1,4 +1,4 @@
-# Copyright (c) HashiCorp, Inc.
+# Copyright IBM Corp. 2024, 2025
 
 apiVersion: v2
 name: vault-secrets-gateway
